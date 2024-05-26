@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -20,7 +21,8 @@ var (
 )
 
 type Dataset struct {
-	name string
+	name           string
+	collectionType string
 }
 
 type Databases struct {
@@ -82,7 +84,7 @@ func main() {
 // get database names from API endpoint
 func getDatabases() ([]Dataset, error) {
 
-	url := *baseUrl + "?command=listdatabases&output=xml"
+	url := *baseUrl + "?command=listdatabases&output=xml&limit=100"
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -100,7 +102,18 @@ func getDatabases() ([]Dataset, error) {
 	var datasets []Dataset
 
 	for _, record := range results.RecordList.Record {
-		datasets = append(datasets, Dataset{record.Database})
+		var collectionType string
+		name := record.Database
+		if strings.HasPrefix(name, "transfer") {
+			collectionType = "transfer"
+		} else if strings.HasPrefix(name, "new") {
+			collectionType = "new"
+		} else if strings.HasPrefix(name, "all") {
+			collectionType = "all"
+		} else {
+			collectionType = "unknown"
+		}
+		datasets = append(datasets, Dataset{name, collectionType})
 	}
 
 	return datasets, nil
@@ -136,7 +149,7 @@ func NewAxiellCollector() *axiellCollector {
 		databaseNumItems: prometheus.NewDesc(
 			"dataset_items",
 			"Number of items in each database",
-			[]string{"dataset_name"},
+			[]string{"dataset_name", "collection_type"},
 			nil,
 		),
 	}
@@ -158,15 +171,21 @@ func (c *axiellCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, database := range databases {
 		numItems, err := fetchNumItems(database.name)
 		if err != nil {
-			log.Printf("Failed to fetch number of items for database %s: %v\n", database, err)
+			log.Printf("Failed to fetch number of items for database %s: %v\n", database.name, err)
 			continue
 		}
+
+		// Extract the clean name without the prefix for the metric label
+		cleanName := strings.TrimPrefix(database.name, "transfer")
+		cleanName = strings.TrimPrefix(cleanName, "new")
+		cleanName = strings.TrimPrefix(cleanName, "all")
+		cleanName = strings.TrimSpace(cleanName) // Remove any leading/trailing spaces
 
 		ch <- prometheus.MustNewConstMetric(
 			c.databaseNumItems,
 			prometheus.GaugeValue,
 			float64(numItems),
-			database.name,
+			cleanName, database.collectionType,
 		)
 	}
 }
