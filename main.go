@@ -178,7 +178,7 @@ func (c *axiellCollector) Collect(ch chan<- prometheus.Metric) {
 		// Extract the clean name without the prefix for the metric label
 		cleanName := strings.TrimPrefix(database.name, "transfer")
 		cleanName = strings.TrimPrefix(cleanName, "new")
-		cleanName = strings.TrimPrefix(cleanName, "all")
+		cleanName = strings.TrimPrefix(cleanName, "total")
 		cleanName = strings.TrimSpace(cleanName) // Remove any leading/trailing spaces
 
 		ch <- prometheus.MustNewConstMetric(
