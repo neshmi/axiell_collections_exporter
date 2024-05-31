@@ -108,8 +108,8 @@ func getDatabases() ([]Dataset, error) {
 			collectionType = "transfer"
 		} else if strings.HasPrefix(name, "new") {
 			collectionType = "new"
-		} else if strings.HasPrefix(name, "all") {
-			collectionType = "all"
+		} else if strings.HasPrefix(name, "total") {
+			collectionType = "total"
 		} else {
 			collectionType = "unknown"
 		}
