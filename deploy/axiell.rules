@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    release: acorprom
+  name: axiell-infrastructure-rules
+  namespace: monitoring
+spec:
+  groups:
+  - name: axiell-api
+    rules:
+    - alert: AxiellExporterRefreshFailing
+      expr: max(axiell_up) == 0
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Axiell exporter cannot read the Collections API"
+        description: "Refreshes from the wwwopac API have failed for 15 minutes. The dashboard is showing the last good counts. Check the exporter logs, the metrics login, and TCP 8081 on wooster-app."
+    - alert: AxiellExporterDataStale
+      expr: time() - max(axiell_last_refresh_success_timestamp_seconds) > 3600
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Axiell collection counts are stale"
+        description: "The last successful refresh was {{ $value | humanizeDuration }} ago."
+    - alert: AxiellExporterNoCollections
+      expr: (sum(axiell_collection_records) or vector(0)) == 0 and on() max(axiell_up) == 1
+      for: 30m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Axiell API reports no records in any collection"
+        description: "The API answers but every collection is empty. This is what an unauthenticated call looks like on staging: check that the metrics login still has read rights (grant_metrics_role.sql)."

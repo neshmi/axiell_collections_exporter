@@ -21,3 +21,6 @@
 go.work
 
 __debug_bin
+
+/axiell_collections_exporter
+.envrc
