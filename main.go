@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,12 +30,14 @@ var (
 func main() {
 	flag.Parse()
 
-	// Credentials come from the environment so they stay out of the process list.
+	// Credentials come from the environment so they stay out of the process
+	// list. The cookie jar carries the WebAPI session started by the login.
+	jar, _ := cookiejar.New(nil)
 	client := &Client{
 		BaseURL:    *baseURL,
 		User:       os.Getenv("AXIELL_USER"),
 		Password:   os.Getenv("AXIELL_PASSWORD"),
-		HTTPClient: &http.Client{Timeout: *refreshTimeout},
+		HTTPClient: &http.Client{Timeout: *refreshTimeout, Jar: jar},
 	}
 	if client.User == "" {
 		log.Printf("AXIELL_USER is not set; querying the API anonymously")

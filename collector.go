@@ -92,6 +92,11 @@ func (r *Refresher) refresh(parent context.Context) {
 }
 
 func (r *Refresher) fetch(ctx context.Context) (*Snapshot, error) {
+	// Log in on every refresh: it is cheap, and it outlives any session
+	// timeout on the server.
+	if err := r.client.Login(ctx); err != nil {
+		return nil, err
+	}
 	var (
 		wg                sync.WaitGroup
 		colls             []Collection

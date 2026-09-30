@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -26,10 +27,32 @@ const facetJSON = `{"adlibJSON":{"recordList":[{"priref":["9"]}],
   {"term":"Orphan","hits":3,"priref":99}]}],
  "diagnostic":{"hits":36580}}}`
 
-func fakeAPI(t *testing.T, wantUser string) *httptest.Server {
+// fakeAPI mimics wwwopac with record-level access control: data is only
+// visible to a session that logged in with the right password.
+func fakeAPI(t *testing.T, user, password string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("user") != wantUser {
+		if r.Method == http.MethodPost {
+			r.ParseForm()
+			q = r.PostForm
+		}
+		if r.URL.Query().Get("password") != "" {
+			t.Errorf("password sent in the query string: %s", r.URL.RawQuery)
+		}
+		if q.Get("command") == "login" {
+			if r.Method != http.MethodPost {
+				t.Errorf("login sent as %s, want POST", r.Method)
+			}
+			if q.Get("username") == user && q.Get("password") == password {
+				http.SetCookie(w, &http.Cookie{Name: "ASP.NET_SessionId", Value: "session-" + user})
+				// Like the real WebAPI, a working login echoes nothing back.
+				w.Write([]byte(`{"adlibJSON":{"recordList":[{"priref":0}],"diagnostic":{"hits":0}}}`))
+				return
+			}
+			w.Write([]byte(`{"adlibJSON":{"recordList":[{"priref":0}],"diagnostic":{"hits":0}}}`))
+			return
+		}
+		if c, err := r.Cookie("ASP.NET_SessionId"); err != nil || c.Value != "session-"+user {
 			w.Write([]byte(`{"adlibJSON":{"diagnostic":{"hits":0}}}`))
 			return
 		}
@@ -47,10 +70,17 @@ func fakeAPI(t *testing.T, wantUser string) *httptest.Server {
 	}))
 }
 
+func newClient(srv *httptest.Server, user, password string) *Client {
+	jar, _ := cookiejar.New(nil)
+	hc := srv.Client()
+	hc.Jar = jar
+	return &Client{BaseURL: srv.URL, User: user, Password: password, HTTPClient: hc}
+}
+
 func TestRefreshExportsCollections(t *testing.T) {
-	srv := fakeAPI(t, "metrics")
+	srv := fakeAPI(t, "metrics", "s3cret")
 	defer srv.Close()
-	c := &Client{BaseURL: srv.URL, User: "metrics", Password: "s3cret", HTTPClient: srv.Client()}
+	c := newClient(srv, "metrics", "s3cret")
 	r := NewRefresher(c, "collect", "collname", "collection.name", 5*time.Second)
 	r.refresh(context.Background())
 
@@ -75,9 +105,9 @@ axiell_up 1
 }
 
 func TestFailedRefreshKeepsLastSnapshot(t *testing.T) {
-	srv := fakeAPI(t, "metrics")
+	srv := fakeAPI(t, "metrics", "s3cret")
 	defer srv.Close()
-	c := &Client{BaseURL: srv.URL, User: "metrics", Password: "s3cret", HTTPClient: srv.Client()}
+	c := newClient(srv, "metrics", "s3cret")
 	r := NewRefresher(c, "collect", "collname", "collection.name", 5*time.Second)
 	r.refresh(context.Background())
 
@@ -95,6 +125,29 @@ func TestFailedRefreshKeepsLastSnapshot(t *testing.T) {
 	}
 	if v := testutil.ToFloat64(r.refreshFailures); v != 1 {
 		t.Fatalf("refresh failures = %v, want 1", v)
+	}
+}
+
+func TestLoginWithoutRightsExportsNoCollections(t *testing.T) {
+	srv := fakeAPI(t, "metrics", "s3cret")
+	defer srv.Close()
+	r := NewRefresher(newClient(srv, "metrics", "wrong"), "collect", "collname", "collection.name", 5*time.Second)
+	r.refresh(context.Background())
+	if r.lastErr != nil {
+		t.Fatalf("refresh should succeed with no rights, got %v", r.lastErr)
+	}
+	if n := testutil.CollectAndCount(r, "axiell_collection_records"); n != 0 {
+		t.Fatalf("want no collections exported, got %d", n)
+	}
+}
+
+func TestAnonymousSkipsLogin(t *testing.T) {
+	srv := fakeAPI(t, "metrics", "s3cret")
+	defer srv.Close()
+	r := NewRefresher(newClient(srv, "", ""), "collect", "collname", "collection.name", 5*time.Second)
+	r.refresh(context.Background())
+	if r.lastErr != nil {
+		t.Fatalf("anonymous refresh should succeed with empty data, got %v", r.lastErr)
 	}
 }
 

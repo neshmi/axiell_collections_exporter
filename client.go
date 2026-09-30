@@ -57,32 +57,73 @@ type response struct {
 
 func (c *Client) get(ctx context.Context, params url.Values) (*response, error) {
 	params.Set("output", "json")
-	if c.User != "" {
-		params.Set("user", c.User)
-		params.Set("password", c.Password)
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
+	return c.do(req, params)
+}
+
+// post sends the parameters as a form body, which keeps them out of the web
+// server's request log.
+func (c *Client) post(ctx context.Context, params url.Values) (*response, error) {
+	params.Set("output", "json")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL, strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return c.do(req, params)
+}
+
+func (c *Client) do(req *http.Request, params url.Values) (*response, error) {
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		// Never surface the URL: it carries the password.
-		return nil, fmt.Errorf("request to database %q failed: %w", params.Get("database"), unwrapURLError(err))
+		// Report the command or database, not the request.
+		return nil, fmt.Errorf("%s request failed: %w", describe(params), unwrapURLError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("database %q: HTTP %d", params.Get("database"), resp.StatusCode)
+		return nil, fmt.Errorf("%s: HTTP %d", describe(params), resp.StatusCode)
 	}
 	var r response
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-		return nil, fmt.Errorf("database %q: decoding response: %w", params.Get("database"), err)
+		return nil, fmt.Errorf("%s: decoding response: %w", describe(params), err)
 	}
 	// wwwopac reports errors with HTTP 200 and a diagnostic.error block.
 	if e := r.AdlibJSON.Diagnostic.Error; e != nil {
-		return nil, fmt.Errorf("database %q: API error: %s", params.Get("database"), e.Message)
+		return nil, fmt.Errorf("%s: API error: %s", describe(params), e.Message)
 	}
 	return &r, nil
+}
+
+func describe(params url.Values) string {
+	if cmd := params.Get("command"); cmd != "" {
+		return "command " + cmd
+	}
+	return fmt.Sprintf("database %q", params.Get("database"))
+}
+
+// Login starts a WebAPI session for the configured Collections login. The
+// WebAPI ties access rights to the ASP.NET session, so the client's cookie
+// jar must be kept for the requests that follow. It does nothing when no user
+// is configured.
+//
+// The login response is not a reliable success signal: a working session
+// gets no userName back from the staging WebAPI. A login with no rights shows
+// up as empty counts instead, which the axiell_collection_records metrics and
+// alerts make visible.
+func (c *Client) Login(ctx context.Context) error {
+	if c.User == "" {
+		return nil
+	}
+	// POST, so the password never appears in the IIS request log.
+	_, err := c.post(ctx, url.Values{
+		"command":  {"login"},
+		"username": {c.User},
+		"password": {c.Password},
+	})
+	return err
 }
 
 func unwrapURLError(err error) error {

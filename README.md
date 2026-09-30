@@ -52,10 +52,20 @@ and transfer collections) and `count by (type) (axiell_collection_records)`
 | `--web.listen-address` | `:9037` |
 | `--web.telemetry-path` | `/metrics` |
 
-Credentials are read from `AXIELL_USER` and `AXIELL_PASSWORD`. They are kept
-out of the command line because wwwopac takes them as query parameters.
-Without them, a server with record-level access control returns 0 for
-everything.
+Credentials are read from `AXIELL_USER` and `AXIELL_PASSWORD`. At the start of
+every refresh the exporter POSTs `command=login&username=…&password=…` as a
+form body, which keeps the password out of the IIS request log. That starts a WebAPI session, kept in a cookie, and the session's access rights
+apply to the queries that follow. The login response itself says nothing
+useful. A login without read rights shows up as no collections and zero
+records, which the `AxiellExporterNoCollections` alert catches. Without
+credentials the exporter queries anonymously, and a server with record-level
+access control then returns 0 for everything.
+
+Unless `adlibweb.xml` has an `<authenticationConfiguration>` (see Axiell's
+"User authentication setup" documentation), the WebAPI does not check the
+password at all: it grants whatever rights the named login has.
+
+Use a read-only login, on a trusted network.
 
 `/healthz` returns 200 while the process is up.
 
